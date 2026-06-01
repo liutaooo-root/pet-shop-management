@@ -32,15 +32,18 @@ app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/categories', categoryRoutes);
 
-// 生产模式：托管前端静态文件
+// 生产模式：托管前端静态文件（仅当 dist 目录存在时）
 if (isProduction) {
     const distPath = path.join(__dirname, '..', 'client', 'dist');
-    app.use(express.static(distPath));
-    
-    // SPA fallback: 所有非 API 请求返回 index.html
-    app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-    });
+    const fs = require('fs');
+    if (fs.existsSync(distPath)) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+            res.sendFile(path.join(distPath, 'index.html'));
+        });
+    } else {
+        console.log('ℹ️  前端静态文件未找到，仅提供 API 服务');
+    }
 } else {
     // 开发模式根路由
     app.get('/', (req, res) => {
