@@ -10,11 +10,5 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: pet-shop-db
-          property: connectionString
-
-databases:
-  - name: pet-shop-db
-    databaseName: pet_shop_db
-    plan: free
+        sync: false
+        # 部署后请在 Render Dashboard → Environment 中手动填入 Supabase 的连接字符串
