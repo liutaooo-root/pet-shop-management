@@ -6,43 +6,54 @@ exports.getAllOrders = async (req, res) => {
         const { page = 1, limit = 10, status, owner_id } = req.query;
         const offset = (page - 1) * limit;
         
-        let query = `
-            SELECT o.*, ow.name as owner_name, ow.phone as owner_phone
-            FROM orders o
-            LEFT JOIN owners ow ON o.owner_id = ow.id
-            WHERE 1=1
-        `;
+        const conditions = [];
         const params = [];
+        let paramIndex = 1;
         
         if (status) {
-            query += ' AND o.status = ?';
+            conditions.push(`o.status = $${paramIndex++}`);
             params.push(status);
         }
         
         if (owner_id) {
-            query += ' AND o.owner_id = ?';
+            conditions.push(`o.owner_id = $${paramIndex++}`);
             params.push(owner_id);
         }
         
-        query += ' ORDER BY o.created_at DESC LIMIT ? OFFSET ?';
+        const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+        
+        const query = `
+            SELECT o.*, ow.name as owner_name, ow.phone as owner_phone
+            FROM orders o
+            LEFT JOIN owners ow ON o.owner_id = ow.id
+            ${whereClause}
+            ORDER BY o.created_at DESC
+            LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+        `;
         params.push(parseInt(limit), parseInt(offset));
         
-        const [rows] = await pool.execute(query, params);
+        const { rows } = await pool.query(query, params);
         
         // 获取总数
-        let countQuery = 'SELECT COUNT(*) as total FROM orders WHERE 1=1';
+        let countQuery = 'SELECT COUNT(*) as total FROM orders';
         const countParams = [];
-        if (status) {
-            countQuery += ' AND status = ?';
-            countParams.push(status);
-        }
-        if (owner_id) {
-            countQuery += ' AND owner_id = ?';
-            countParams.push(owner_id);
+        let countParamIndex = 1;
+        
+        if (status || owner_id) {
+            const countConditions = [];
+            if (status) {
+                countConditions.push(`status = $${countParamIndex++}`);
+                countParams.push(status);
+            }
+            if (owner_id) {
+                countConditions.push(`owner_id = $${countParamIndex++}`);
+                countParams.push(owner_id);
+            }
+            countQuery += ' WHERE ' + countConditions.join(' AND ');
         }
         
-        const [countResult] = await pool.execute(countQuery, countParams);
-        const total = countResult[0].total;
+        const { rows: countRows } = await pool.query(countQuery, countParams);
+        const total = parseInt(countRows[0].total);
         
         res.json({
             success: true,
@@ -70,11 +81,11 @@ exports.getOrderById = async (req, res) => {
         const { id } = req.params;
         
         // 获取订单头信息
-        const [orderRows] = await pool.execute(`
+        const { rows: orderRows } = await pool.query(`
             SELECT o.*, ow.name as owner_name, ow.phone as owner_phone, ow.email as owner_email
             FROM orders o
             LEFT JOIN owners ow ON o.owner_id = ow.id
-            WHERE o.id = ?
+            WHERE o.id = $1
         `, [id]);
         
         if (orderRows.length === 0) {
@@ -85,11 +96,11 @@ exports.getOrderById = async (req, res) => {
         }
         
         // 获取订单详情
-        const [itemRows] = await pool.execute(`
+        const { rows: itemRows } = await pool.query(`
             SELECT oi.*, p.name as product_name, p.image_url
             FROM order_items oi
             LEFT JOIN products p ON oi.product_id = p.id
-            WHERE oi.order_id = ?
+            WHERE oi.order_id = $1
         `, [id]);
         
         res.json({
@@ -111,10 +122,10 @@ exports.getOrderById = async (req, res) => {
 
 // 创建订单
 exports.createOrder = async (req, res) => {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     
     try {
-        await connection.beginTransaction();
+        await client.query('BEGIN');
         
         const { owner_id, items, payment_method, remarks } = req.body;
         
@@ -127,12 +138,12 @@ exports.createOrder = async (req, res) => {
         }
         
         // 检查主人是否存在
-        const [ownerExists] = await connection.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: ownerRows } = await client.query(
+            'SELECT id FROM owners WHERE id = $1',
             [owner_id]
         );
         
-        if (ownerExists.length === 0) {
+        if (ownerRows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: '主人不存在'
@@ -150,7 +161,7 @@ exports.createOrder = async (req, res) => {
             const { product_id, quantity } = item;
             
             if (!product_id || !quantity || quantity <= 0) {
-                await connection.rollback();
+                await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
                     message: '商品ID和数量必须为有效值'
@@ -158,13 +169,13 @@ exports.createOrder = async (req, res) => {
             }
             
             // 获取商品信息和库存
-            const [productRows] = await connection.execute(
-                'SELECT id, name, price, stock FROM products WHERE id = ? AND status = "active"',
-                [product_id]
+            const { rows: productRows } = await client.query(
+                'SELECT id, name, price, stock FROM products WHERE id = $1 AND status = $2',
+                [product_id, 'active']
             );
             
             if (productRows.length === 0) {
-                await connection.rollback();
+                await client.query('ROLLBACK');
                 return res.status(404).json({
                     success: false,
                     message: `商品ID ${product_id} 不存在或已下架`
@@ -174,47 +185,48 @@ exports.createOrder = async (req, res) => {
             const product = productRows[0];
             
             if (product.stock < quantity) {
-                await connection.rollback();
+                await client.query('ROLLBACK');
                 return res.status(400).json({
                     success: false,
                     message: `商品 ${product.name} 库存不足，当前库存: ${product.stock}`
                 });
             }
             
-            const subtotal = product.price * quantity;
+            const subtotal = parseFloat(product.price) * quantity;
             totalAmount += subtotal;
             
             orderItems.push({
                 product_id,
                 quantity,
-                price: product.price,
+                price: parseFloat(product.price),
                 subtotal
             });
             
             // 减少库存
-            await connection.execute(
-                'UPDATE products SET stock = stock - ? WHERE id = ?',
+            await client.query(
+                'UPDATE products SET stock = stock - $1 WHERE id = $2',
                 [quantity, product_id]
             );
         }
         
         // 创建订单
-        const [orderResult] = await connection.execute(
-            'INSERT INTO orders (order_no, owner_id, total_amount, payment_method, remarks, status) VALUES (?, ?, ?, ?, ?, "pending")',
+        const { rows: orderResult } = await client.query(
+            `INSERT INTO orders (order_no, owner_id, total_amount, payment_method, remarks, status) 
+             VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
             [orderNo, owner_id, totalAmount, payment_method, remarks]
         );
         
-        const orderId = orderResult.insertId;
+        const orderId = orderResult[0].id;
         
         // 创建订单详情
         for (const item of orderItems) {
-            await connection.execute(
-                'INSERT INTO order_items (order_id, product_id, quantity, price, subtotal) VALUES (?, ?, ?, ?, ?)',
+            await client.query(
+                'INSERT INTO order_items (order_id, product_id, quantity, price, subtotal) VALUES ($1, $2, $3, $4, $5)',
                 [orderId, item.product_id, item.quantity, item.price, item.subtotal]
             );
         }
         
-        await connection.commit();
+        await client.query('COMMIT');
         
         res.status(201).json({
             success: true,
@@ -227,7 +239,7 @@ exports.createOrder = async (req, res) => {
             }
         });
     } catch (error) {
-        await connection.rollback();
+        await client.query('ROLLBACK');
         console.error('创建订单失败:', error);
         res.status(500).json({
             success: false,
@@ -235,7 +247,7 @@ exports.createOrder = async (req, res) => {
             error: error.message
         });
     } finally {
-        connection.release();
+        client.release();
     }
 };
 
@@ -255,8 +267,8 @@ exports.updateOrderStatus = async (req, res) => {
         }
         
         // 检查订单是否存在
-        const [existing] = await pool.execute(
-            'SELECT id, status FROM orders WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id, status FROM orders WHERE id = $1',
             [id]
         );
         
@@ -277,8 +289,8 @@ exports.updateOrderStatus = async (req, res) => {
             });
         }
         
-        await pool.execute(
-            'UPDATE orders SET status = ? WHERE id = ?',
+        await pool.query(
+            'UPDATE orders SET status = $1 WHERE id = $2',
             [status, id]
         );
         
@@ -298,16 +310,16 @@ exports.updateOrderStatus = async (req, res) => {
 
 // 取消订单
 exports.cancelOrder = async (req, res) => {
-    const connection = await pool.getConnection();
+    const client = await pool.connect();
     
     try {
-        await connection.beginTransaction();
+        await client.query('BEGIN');
         
         const { id } = req.params;
         
         // 检查订单是否存在
-        const [existing] = await connection.execute(
-            'SELECT id, status FROM orders WHERE id = ?',
+        const { rows: existing } = await client.query(
+            'SELECT id, status FROM orders WHERE id = $1',
             [id]
         );
         
@@ -322,7 +334,7 @@ exports.cancelOrder = async (req, res) => {
         
         // 如果订单已取消或已完成，不能取消
         if (order.status === 'cancelled') {
-            await connection.rollback();
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
                 message: '订单已取消'
@@ -330,7 +342,7 @@ exports.cancelOrder = async (req, res) => {
         }
         
         if (order.status === 'completed') {
-            await connection.rollback();
+            await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
                 message: '已完成的订单不能取消'
@@ -338,32 +350,32 @@ exports.cancelOrder = async (req, res) => {
         }
         
         // 获取订单详情，恢复库存
-        const [orderItems] = await connection.execute(
-            'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+        const { rows: orderItems } = await client.query(
+            'SELECT product_id, quantity FROM order_items WHERE order_id = $1',
             [id]
         );
         
         for (const item of orderItems) {
-            await connection.execute(
-                'UPDATE products SET stock = stock + ? WHERE id = ?',
+            await client.query(
+                'UPDATE products SET stock = stock + $1 WHERE id = $2',
                 [item.quantity, item.product_id]
             );
         }
         
         // 更新订单状态为取消
-        await connection.execute(
-            'UPDATE orders SET status = "cancelled" WHERE id = ?',
-            [id]
+        await client.query(
+            'UPDATE orders SET status = $1 WHERE id = $2',
+            ['cancelled', id]
         );
         
-        await connection.commit();
+        await client.query('COMMIT');
         
         res.json({
             success: true,
             message: '订单取消成功，库存已恢复'
         });
     } catch (error) {
-        await connection.rollback();
+        await client.query('ROLLBACK');
         console.error('取消订单失败:', error);
         res.status(500).json({
             success: false,
@@ -371,7 +383,7 @@ exports.cancelOrder = async (req, res) => {
             error: error.message
         });
     } finally {
-        connection.release();
+        client.release();
     }
 };
 
@@ -383,44 +395,45 @@ exports.getOwnerOrders = async (req, res) => {
         const offset = (page - 1) * limit;
         
         // 检查主人是否存在
-        const [ownerExists] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: ownerRows } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [ownerId]
         );
         
-        if (ownerExists.length === 0) {
+        if (ownerRows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: '主人不存在'
             });
         }
         
-        let query = `
-            SELECT * FROM orders 
-            WHERE owner_id = ?
-        `;
+        const conditions = ['owner_id = $1'];
         const params = [ownerId];
+        let paramIndex = 2;
         
         if (status) {
-            query += ' AND status = ?';
+            conditions.push(`status = $${paramIndex++}`);
             params.push(status);
         }
         
-        query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
         
-        const [rows] = await pool.execute(query, params);
+        const { rows } = await pool.query(
+            `SELECT * FROM orders WHERE ${conditions.join(' AND ')}
+             ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+            params
+        );
         
         // 获取总数
-        let countQuery = 'SELECT COUNT(*) as total FROM orders WHERE owner_id = ?';
+        let countQuery = 'SELECT COUNT(*) as total FROM orders WHERE owner_id = $1';
         const countParams = [ownerId];
         if (status) {
-            countQuery += ' AND status = ?';
+            countQuery += ' AND status = $2';
             countParams.push(status);
         }
         
-        const [countResult] = await pool.execute(countQuery, countParams);
-        const total = countResult[0].total;
+        const { rows: countRows } = await pool.query(countQuery, countParams);
+        const total = parseInt(countRows[0].total);
         
         res.json({
             success: true,
@@ -447,58 +460,47 @@ exports.getOrderStats = async (req, res) => {
     try {
         const { start_date, end_date } = req.query;
         
-        let query = `
+        const conditions = [];
+        const params = [];
+        let paramIndex = 1;
+        
+        if (start_date) {
+            conditions.push(`created_at >= $${paramIndex++}`);
+            params.push(start_date);
+        }
+        
+        if (end_date) {
+            conditions.push(`created_at <= $${paramIndex++}`);
+            params.push(end_date);
+        }
+        
+        const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+        
+        const { rows } = await pool.query(`
             SELECT 
                 COUNT(*) as total_orders,
                 SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
                 SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
                 SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-                SUM(total_amount) as total_revenue,
-                SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END) as completed_revenue
+                COALESCE(SUM(total_amount), 0) as total_revenue,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN total_amount ELSE 0 END), 0) as completed_revenue
             FROM orders
-            WHERE 1=1
-        `;
-        
-        const params = [];
-        
-        if (start_date) {
-            query += ' AND created_at >= ?';
-            params.push(start_date);
-        }
-        
-        if (end_date) {
-            query += ' AND created_at <= ?';
-            params.push(end_date);
-        }
-        
-        const [rows] = await pool.execute(query, params);
+            ${whereClause}
+        `, params);
         
         // 获取销售额趋势（按天）
-        let trendQuery = `
+        const { rows: trendRows } = await pool.query(`
             SELECT 
                 DATE(created_at) as date,
                 COUNT(*) as orders,
-                SUM(total_amount) as revenue
+                COALESCE(SUM(total_amount), 0) as revenue
             FROM orders
             WHERE status = 'completed'
-        `;
-        
-        const trendParams = [];
-        
-        if (start_date) {
-            trendQuery += ' AND created_at >= ?';
-            trendParams.push(start_date);
-        }
-        
-        if (end_date) {
-            trendQuery += ' AND created_at <= ?';
-            trendParams.push(end_date);
-        }
-        
-        trendQuery += ' GROUP BY DATE(created_at) ORDER BY date ASC';
-        
-        const [trendRows] = await pool.execute(trendQuery, trendParams);
+            ${start_date ? `AND created_at >= $1` : ''}
+            ${end_date ? `AND created_at <= $${start_date ? 2 : 1}` : ''}
+            GROUP BY DATE(created_at) ORDER BY date ASC
+        `, [...(start_date ? [start_date] : []), ...(end_date ? [end_date] : [])]);
         
         res.json({
             success: true,

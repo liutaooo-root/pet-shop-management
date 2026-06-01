@@ -3,7 +3,7 @@ const { pool } = require('../config/db');
 // 获取所有宠物
 exports.getAllPets = async (req, res) => {
     try {
-        const [rows] = await pool.execute(`
+        const { rows } = await pool.query(`
             SELECT p.*, o.name as owner_name, o.phone as owner_phone 
             FROM pets p 
             LEFT JOIN owners o ON p.owner_id = o.id 
@@ -27,11 +27,11 @@ exports.getAllPets = async (req, res) => {
 exports.getPetById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [rows] = await pool.execute(`
+        const { rows } = await pool.query(`
             SELECT p.*, o.name as owner_name, o.phone as owner_phone 
             FROM pets p 
             LEFT JOIN owners o ON p.owner_id = o.id 
-            WHERE p.id = ?
+            WHERE p.id = $1
         `, [id]);
         
         if (rows.length === 0) {
@@ -60,7 +60,6 @@ exports.createPet = async (req, res) => {
     try {
         const { name, species, breed, age, gender, color, weight, owner_id, remarks } = req.body;
         
-        // 验证必填字段
         if (!name || !species || !owner_id) {
             return res.status(400).json({
                 success: false,
@@ -68,9 +67,8 @@ exports.createPet = async (req, res) => {
             });
         }
         
-        // 检查主人是否存在
-        const [ownerExists] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: ownerExists } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [owner_id]
         );
         
@@ -81,8 +79,9 @@ exports.createPet = async (req, res) => {
             });
         }
         
-        const [result] = await pool.execute(
-            'INSERT INTO pets (name, species, breed, age, gender, color, weight, owner_id, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        const { rows: result } = await pool.query(
+            `INSERT INTO pets (name, species, breed, age, gender, color, weight, owner_id, remarks) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
             [name, species, breed, age, gender, color, weight, owner_id, remarks]
         );
         
@@ -90,7 +89,7 @@ exports.createPet = async (req, res) => {
             success: true,
             message: '宠物创建成功',
             data: {
-                id: result.insertId,
+                id: result[0].id,
                 name,
                 species,
                 breed,
@@ -118,9 +117,8 @@ exports.updatePet = async (req, res) => {
         const { id } = req.params;
         const { name, species, breed, age, gender, color, weight, owner_id, remarks } = req.body;
         
-        // 检查宠物是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM pets WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM pets WHERE id = $1',
             [id]
         );
         
@@ -131,10 +129,9 @@ exports.updatePet = async (req, res) => {
             });
         }
         
-        // 如果更新主人ID，检查新主人是否存在
         if (owner_id) {
-            const [ownerExists] = await pool.execute(
-                'SELECT id FROM owners WHERE id = ?',
+            const { rows: ownerExists } = await pool.query(
+                'SELECT id FROM owners WHERE id = $1',
                 [owner_id]
             );
             
@@ -146,8 +143,9 @@ exports.updatePet = async (req, res) => {
             }
         }
         
-        await pool.execute(
-            'UPDATE pets SET name = ?, species = ?, breed = ?, age = ?, gender = ?, color = ?, weight = ?, owner_id = ?, remarks = ? WHERE id = ?',
+        await pool.query(
+            `UPDATE pets SET name = $1, species = $2, breed = $3, age = $4, gender = $5, 
+             color = $6, weight = $7, owner_id = $8, remarks = $9 WHERE id = $10`,
             [name, species, breed, age, gender, color, weight, owner_id, remarks, id]
         );
         
@@ -170,9 +168,8 @@ exports.deletePet = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查宠物是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM pets WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM pets WHERE id = $1',
             [id]
         );
         
@@ -183,7 +180,7 @@ exports.deletePet = async (req, res) => {
             });
         }
         
-        await pool.execute('DELETE FROM pets WHERE id = ?', [id]);
+        await pool.query('DELETE FROM pets WHERE id = $1', [id]);
         
         res.json({
             success: true,
@@ -204,9 +201,8 @@ exports.getPetsByOwnerId = async (req, res) => {
     try {
         const { ownerId } = req.params;
         
-        // 检查主人是否存在
-        const [ownerExists] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: ownerExists } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [ownerId]
         );
         
@@ -217,8 +213,8 @@ exports.getPetsByOwnerId = async (req, res) => {
             });
         }
         
-        const [rows] = await pool.execute(
-            'SELECT * FROM pets WHERE owner_id = ? ORDER BY created_at DESC',
+        const { rows } = await pool.query(
+            'SELECT * FROM pets WHERE owner_id = $1 ORDER BY created_at DESC',
             [ownerId]
         );
         

@@ -3,7 +3,7 @@ const { pool } = require('../config/db');
 // 获取所有商品
 exports.getAllProducts = async (req, res) => {
     try {
-        const [rows] = await pool.execute(`
+        const { rows } = await pool.query(`
             SELECT p.*, c.name as category_name 
             FROM products p 
             LEFT JOIN categories c ON p.category_id = c.id 
@@ -27,11 +27,11 @@ exports.getAllProducts = async (req, res) => {
 exports.getProductById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [rows] = await pool.execute(`
+        const { rows } = await pool.query(`
             SELECT p.*, c.name as category_name 
             FROM products p 
             LEFT JOIN categories c ON p.category_id = c.id 
-            WHERE p.id = ?
+            WHERE p.id = $1
         `, [id]);
         
         if (rows.length === 0) {
@@ -60,7 +60,6 @@ exports.createProduct = async (req, res) => {
     try {
         const { name, category_id, price, stock, description, image_url, status } = req.body;
         
-        // 验证必填字段
         if (!name || !price) {
             return res.status(400).json({
                 success: false,
@@ -68,10 +67,9 @@ exports.createProduct = async (req, res) => {
             });
         }
         
-        // 如果提供了分类ID，检查分类是否存在
         if (category_id) {
-            const [categoryExists] = await pool.execute(
-                'SELECT id FROM categories WHERE id = ?',
+            const { rows: categoryExists } = await pool.query(
+                'SELECT id FROM categories WHERE id = $1',
                 [category_id]
             );
             
@@ -83,8 +81,9 @@ exports.createProduct = async (req, res) => {
             }
         }
         
-        const [result] = await pool.execute(
-            'INSERT INTO products (name, category_id, price, stock, description, image_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        const { rows: result } = await pool.query(
+            `INSERT INTO products (name, category_id, price, stock, description, image_url, status) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
             [name, category_id, price, stock || 0, description, image_url, status || 'active']
         );
         
@@ -92,7 +91,7 @@ exports.createProduct = async (req, res) => {
             success: true,
             message: '商品创建成功',
             data: {
-                id: result.insertId,
+                id: result[0].id,
                 name,
                 category_id,
                 price,
@@ -118,9 +117,8 @@ exports.updateProduct = async (req, res) => {
         const { id } = req.params;
         const { name, category_id, price, stock, description, image_url, status } = req.body;
         
-        // 检查商品是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM products WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM products WHERE id = $1',
             [id]
         );
         
@@ -131,10 +129,9 @@ exports.updateProduct = async (req, res) => {
             });
         }
         
-        // 如果提供了分类ID，检查分类是否存在
         if (category_id) {
-            const [categoryExists] = await pool.execute(
-                'SELECT id FROM categories WHERE id = ?',
+            const { rows: categoryExists } = await pool.query(
+                'SELECT id FROM categories WHERE id = $1',
                 [category_id]
             );
             
@@ -146,8 +143,9 @@ exports.updateProduct = async (req, res) => {
             }
         }
         
-        await pool.execute(
-            'UPDATE products SET name = ?, category_id = ?, price = ?, stock = ?, description = ?, image_url = ?, status = ? WHERE id = ?',
+        await pool.query(
+            `UPDATE products SET name = $1, category_id = $2, price = $3, stock = $4, 
+             description = $5, image_url = $6, status = $7 WHERE id = $8`,
             [name, category_id, price, stock, description, image_url, status, id]
         );
         
@@ -170,9 +168,8 @@ exports.deleteProduct = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查商品是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM products WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM products WHERE id = $1',
             [id]
         );
         
@@ -183,9 +180,8 @@ exports.deleteProduct = async (req, res) => {
             });
         }
         
-        // 检查商品是否在订单中使用
-        const [orderItems] = await pool.execute(
-            'SELECT id FROM order_items WHERE product_id = ? LIMIT 1',
+        const { rows: orderItems } = await pool.query(
+            'SELECT id FROM order_items WHERE product_id = $1 LIMIT 1',
             [id]
         );
         
@@ -196,7 +192,7 @@ exports.deleteProduct = async (req, res) => {
             });
         }
         
-        await pool.execute('DELETE FROM products WHERE id = ?', [id]);
+        await pool.query('DELETE FROM products WHERE id = $1', [id]);
         
         res.json({
             success: true,
@@ -216,11 +212,10 @@ exports.deleteProduct = async (req, res) => {
 exports.updateStock = async (req, res) => {
     try {
         const { id } = req.params;
-        const { stock, operation } = req.body; // operation: 'set', 'increment', 'decrement'
+        const { stock, operation } = req.body;
         
-        // 检查商品是否存在
-        const [existing] = await pool.execute(
-            'SELECT id, stock FROM products WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id, stock FROM products WHERE id = $1',
             [id]
         );
         
@@ -247,8 +242,8 @@ exports.updateStock = async (req, res) => {
             newStock = parseInt(stock);
         }
         
-        await pool.execute(
-            'UPDATE products SET stock = ? WHERE id = ?',
+        await pool.query(
+            'UPDATE products SET stock = $1 WHERE id = $2',
             [newStock, id]
         );
         
@@ -270,13 +265,13 @@ exports.updateStock = async (req, res) => {
 // 获取低库存商品
 exports.getLowStockProducts = async (req, res) => {
     try {
-        const threshold = req.query.threshold || 10; // 默认阈值为10
+        const threshold = req.query.threshold || 10;
         
-        const [rows] = await pool.execute(`
+        const { rows } = await pool.query(`
             SELECT p.*, c.name as category_name 
             FROM products p 
             LEFT JOIN categories c ON p.category_id = c.id 
-            WHERE p.stock <= ? AND p.status = 'active'
+            WHERE p.stock <= $1 AND p.status = 'active'
             ORDER BY p.stock ASC
         `, [threshold]);
         

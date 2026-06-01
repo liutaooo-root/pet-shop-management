@@ -3,7 +3,7 @@ const { pool } = require('../config/db');
 // 获取所有主人
 exports.getAllOwners = async (req, res) => {
     try {
-        const [rows] = await pool.execute(
+        const { rows } = await pool.query(
             'SELECT * FROM owners ORDER BY created_at DESC'
         );
         res.json({
@@ -24,8 +24,8 @@ exports.getAllOwners = async (req, res) => {
 exports.getOwnerById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [rows] = await pool.execute(
-            'SELECT * FROM owners WHERE id = ?',
+        const { rows } = await pool.query(
+            'SELECT * FROM owners WHERE id = $1',
             [id]
         );
         
@@ -55,7 +55,6 @@ exports.createOwner = async (req, res) => {
     try {
         const { name, phone, email, address } = req.body;
         
-        // 验证必填字段
         if (!name || !phone) {
             return res.status(400).json({
                 success: false,
@@ -63,9 +62,8 @@ exports.createOwner = async (req, res) => {
             });
         }
         
-        // 检查电话是否已存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM owners WHERE phone = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM owners WHERE phone = $1',
             [phone]
         );
         
@@ -76,8 +74,8 @@ exports.createOwner = async (req, res) => {
             });
         }
         
-        const [result] = await pool.execute(
-            'INSERT INTO owners (name, phone, email, address) VALUES (?, ?, ?, ?)',
+        const { rows: result } = await pool.query(
+            'INSERT INTO owners (name, phone, email, address) VALUES ($1, $2, $3, $4) RETURNING id',
             [name, phone, email, address]
         );
         
@@ -85,7 +83,7 @@ exports.createOwner = async (req, res) => {
             success: true,
             message: '主人创建成功',
             data: {
-                id: result.insertId,
+                id: result[0].id,
                 name,
                 phone,
                 email,
@@ -108,9 +106,8 @@ exports.updateOwner = async (req, res) => {
         const { id } = req.params;
         const { name, phone, email, address } = req.body;
         
-        // 检查主人是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [id]
         );
         
@@ -121,10 +118,9 @@ exports.updateOwner = async (req, res) => {
             });
         }
         
-        // 如果更新电话，检查是否与其他记录冲突
         if (phone) {
-            const [phoneCheck] = await pool.execute(
-                'SELECT id FROM owners WHERE phone = ? AND id != ?',
+            const { rows: phoneCheck } = await pool.query(
+                'SELECT id FROM owners WHERE phone = $1 AND id != $2',
                 [phone, id]
             );
             
@@ -136,8 +132,8 @@ exports.updateOwner = async (req, res) => {
             }
         }
         
-        await pool.execute(
-            'UPDATE owners SET name = ?, phone = ?, email = ?, address = ? WHERE id = ?',
+        await pool.query(
+            'UPDATE owners SET name = $1, phone = $2, email = $3, address = $4 WHERE id = $5',
             [name, phone, email, address, id]
         );
         
@@ -160,9 +156,8 @@ exports.deleteOwner = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查主人是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [id]
         );
         
@@ -173,8 +168,7 @@ exports.deleteOwner = async (req, res) => {
             });
         }
         
-        // 删除主人（级联删除宠物）
-        await pool.execute('DELETE FROM owners WHERE id = ?', [id]);
+        await pool.query('DELETE FROM owners WHERE id = $1', [id]);
         
         res.json({
             success: true,
@@ -195,9 +189,8 @@ exports.getOwnerPets = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查主人是否存在
-        const [ownerExists] = await pool.execute(
-            'SELECT id FROM owners WHERE id = ?',
+        const { rows: ownerExists } = await pool.query(
+            'SELECT id FROM owners WHERE id = $1',
             [id]
         );
         
@@ -208,8 +201,8 @@ exports.getOwnerPets = async (req, res) => {
             });
         }
         
-        const [rows] = await pool.execute(
-            'SELECT * FROM pets WHERE owner_id = ? ORDER BY created_at DESC',
+        const { rows } = await pool.query(
+            'SELECT * FROM pets WHERE owner_id = $1 ORDER BY created_at DESC',
             [id]
         );
         

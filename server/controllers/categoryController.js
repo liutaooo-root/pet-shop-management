@@ -3,7 +3,7 @@ const { pool } = require('../config/db');
 // 获取所有分类
 exports.getAllCategories = async (req, res) => {
     try {
-        const [rows] = await pool.execute(
+        const { rows } = await pool.query(
             'SELECT * FROM categories ORDER BY id ASC'
         );
         res.json({
@@ -24,8 +24,8 @@ exports.getAllCategories = async (req, res) => {
 exports.getCategoryById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [rows] = await pool.execute(
-            'SELECT * FROM categories WHERE id = ?',
+        const { rows } = await pool.query(
+            'SELECT * FROM categories WHERE id = $1',
             [id]
         );
         
@@ -55,7 +55,6 @@ exports.createCategory = async (req, res) => {
     try {
         const { name, description } = req.body;
         
-        // 验证必填字段
         if (!name) {
             return res.status(400).json({
                 success: false,
@@ -63,9 +62,8 @@ exports.createCategory = async (req, res) => {
             });
         }
         
-        // 检查分类名是否已存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM categories WHERE name = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM categories WHERE name = $1',
             [name]
         );
         
@@ -76,8 +74,8 @@ exports.createCategory = async (req, res) => {
             });
         }
         
-        const [result] = await pool.execute(
-            'INSERT INTO categories (name, description) VALUES (?, ?)',
+        const { rows: result } = await pool.query(
+            'INSERT INTO categories (name, description) VALUES ($1, $2) RETURNING id',
             [name, description]
         );
         
@@ -85,7 +83,7 @@ exports.createCategory = async (req, res) => {
             success: true,
             message: '分类创建成功',
             data: {
-                id: result.insertId,
+                id: result[0].id,
                 name,
                 description
             }
@@ -106,9 +104,8 @@ exports.updateCategory = async (req, res) => {
         const { id } = req.params;
         const { name, description } = req.body;
         
-        // 检查分类是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM categories WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM categories WHERE id = $1',
             [id]
         );
         
@@ -119,10 +116,9 @@ exports.updateCategory = async (req, res) => {
             });
         }
         
-        // 如果更新名称，检查是否与其他记录冲突
         if (name) {
-            const [nameCheck] = await pool.execute(
-                'SELECT id FROM categories WHERE name = ? AND id != ?',
+            const { rows: nameCheck } = await pool.query(
+                'SELECT id FROM categories WHERE name = $1 AND id != $2',
                 [name, id]
             );
             
@@ -134,8 +130,8 @@ exports.updateCategory = async (req, res) => {
             }
         }
         
-        await pool.execute(
-            'UPDATE categories SET name = ?, description = ? WHERE id = ?',
+        await pool.query(
+            'UPDATE categories SET name = $1, description = $2 WHERE id = $3',
             [name, description, id]
         );
         
@@ -158,9 +154,8 @@ exports.deleteCategory = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查分类是否存在
-        const [existing] = await pool.execute(
-            'SELECT id FROM categories WHERE id = ?',
+        const { rows: existing } = await pool.query(
+            'SELECT id FROM categories WHERE id = $1',
             [id]
         );
         
@@ -171,9 +166,8 @@ exports.deleteCategory = async (req, res) => {
             });
         }
         
-        // 检查分类下是否有商品
-        const [products] = await pool.execute(
-            'SELECT id FROM products WHERE category_id = ? LIMIT 1',
+        const { rows: products } = await pool.query(
+            'SELECT id FROM products WHERE category_id = $1 LIMIT 1',
             [id]
         );
         
@@ -184,7 +178,7 @@ exports.deleteCategory = async (req, res) => {
             });
         }
         
-        await pool.execute('DELETE FROM categories WHERE id = ?', [id]);
+        await pool.query('DELETE FROM categories WHERE id = $1', [id]);
         
         res.json({
             success: true,
@@ -205,9 +199,8 @@ exports.getCategoryProducts = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // 检查分类是否存在
-        const [categoryExists] = await pool.execute(
-            'SELECT id FROM categories WHERE id = ?',
+        const { rows: categoryExists } = await pool.query(
+            'SELECT id FROM categories WHERE id = $1',
             [id]
         );
         
@@ -218,8 +211,8 @@ exports.getCategoryProducts = async (req, res) => {
             });
         }
         
-        const [rows] = await pool.execute(
-            'SELECT * FROM products WHERE category_id = ? ORDER BY created_at DESC',
+        const { rows } = await pool.query(
+            'SELECT * FROM products WHERE category_id = $1 ORDER BY created_at DESC',
             [id]
         );
         
