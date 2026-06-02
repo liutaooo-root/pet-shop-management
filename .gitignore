@@ -31,3 +31,6 @@ database/*.sql.bak
 *.tmp
 tmp/
 temp/
+
+# Vercel
+.vercel/

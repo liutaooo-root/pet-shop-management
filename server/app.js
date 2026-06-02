@@ -33,7 +33,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/categories', categoryRoutes);
 
 // 生产模式：托管前端静态文件（仅当 dist 目录存在时）
-if (isProduction) {
+if (isProduction && !process.env.VERCEL) {
     const distPath = path.join(__dirname, '..', 'client', 'dist');
     const fs = require('fs');
     if (fs.existsSync(distPath)) {
